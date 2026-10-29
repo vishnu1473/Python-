@@ -1,0 +1,168 @@
+# ASM AI Assistant — RAG Application Complete Technical & Functional Documentation
+
+> **System Overview:** On-Premise Retrieval-Augmented Generation (RAG) & Industrial Intelligence Platform for Smart Manufacturing  
+> **Tech Stack:** Python (FastAPI/Flask), React + Vite, Ollama (Gemma 3), ChromaDB / Endee, QuestDB, PostgreSQL, LangGraph, Kafka, Nginx  
+
+---
+
+## 1. System Overview & Core Capabilities
+
+The **ASM AI Assistant** is an enterprise-grade, privacy-first, on-premise RAG platform engineered specifically for smart manufacturing, operator support, failure analysis, and machine log analytics. It operates 100% offline (air-gapped capable) to guarantee data privacy, low latency, and zero dependency on external cloud services.
+
+### Key Capabilities at a Glance
+- 💬 **Conversational Multi-Turn RAG**: Context-aware Q&A with token streaming (SSE) via Ollama, maintaining session history up to 5 conversation exchanges.
+- 🎯 **Multi-Intent Routing**: Automatic LLM-based classification of queries into `CASUAL`, `GENERAL`, `DOCUMENT`, `FA_REPORT`, `BOM_QUERY`, or `LOG_QUERY`.
+- 🔍 **Hybrid Multi-Vector Retrieval**: Combines BM25 keyword search, dense vector retrieval (ChromaDB / Endee), SPLADE sparse caching, and Cross-Encoder reranking (`ms-marco-MiniLM-L-6-v2`).
+- 📈 **Feedback Learning & Trust Scores**: Continuous reinforcement loop adjusting document chunk "trust scores" based on user upvotes/downvotes to optimize future retrieval.
+- 🤖 **LangGraph Autonomous Agents**:
+  - **Failure Analysis (FA) Agent**: State-driven multi-step diagnosis, report extraction, and PowerPoint (`.pptx`) report generation.
+  - **QuestDB Log Diagnostic Agent**: Time-series log processing, root cause tracing, voltage/pressure anomaly detection, and predictive health scoring.
+- 🧩 **Multimodal Ingestion**: Ingests PDFs (with image extraction), PPTX, CAD files (`.dwg`/`.dxf`), Schematics, and Motion Configs using Docling-structured chunking.
+- 🔒 **Enterprise Security & RBAC**: Station-level and category-level permissions, regex guardrails, Nginx file-auth proxy with signed cookies for raw document previews, and full audit provenance logging.
+
+---
+
+## 2. Technical Architecture & Component Pipeline
+
+### 2.1 End-to-End Architectural Data Flow
+
+```mermaid
+flowchart TD
+    User([User / Operator UI]) <-->|HTTPS / REST / SSE| Frontend[React + Vite Frontend]
+    Frontend <-->|API Requests / Auth Cookies| Nginx[Nginx Reverse Proxy & File Auth]
+    
+    subgraph Core Platform
+        Nginx <--> FastAPI[FastAPI / Flask Backend - src/fastapi_endpoint.py]
+        FastAPI --> Guardrails[Query Safety Guardrails - src/guardrails.py]
+        FastAPI --> IntentRouter[LLM Intent Router - src/intent_routing.py]
+        FastAPI --> RBAC[RBAC & Permissions Check]
+        FastAPI --> HistoryMgr[Chat History Manager - PostgreSQL / Mongo]
+        
+        subgraph Intent Execution Engine
+            IntentRouter -->|DOCUMENT| RAGMgr[RAG Manager - src/rag_manager.py]
+            IntentRouter -->|FA_REPORT| FAAgent[LangGraph FA Agent - src/fa_agent.py]
+            IntentRouter -->|LOG_QUERY| QuestDBAgent[QuestDB Agent - src/questdb_agent.py]
+            IntentRouter -->|BOM_QUERY| BOMPlanner[BOM Query Planner - src/bom_query_planner.py]
+            IntentRouter -->|CASUAL/GENERAL| DirectLLM[Direct Ollama LLM Stream]
+        end
+        
+        subgraph Hybrid Search & Retrieval
+            RAGMgr --> BM25[BM25 Lexical Retriever]
+            RAGMgr --> VectorDB[(ChromaDB / Endee Vector Store)]
+            RAGMgr --> SPLADE[SPLADE Sparse Encoder Cache]
+            RAGMgr --> CrossEncoder[Cross-Encoder Reranker - MiniLM]
+            RAGMgr --> TrustRerank[Feedback Trust-Score Reranker]
+        end
+        
+        subgraph External / Auxiliary Services
+            DirectLLM & RAGMgr & FAAgent <-->|Ollama API :11434| Ollama[Ollama LLM Engine - Gemma3]
+            QuestDBAgent <-->|SQL / REST| QuestDB[(QuestDB Time-Series DB)]
+            BOMPlanner <-->|SQL| Postgres[(PostgreSQL Relational DB)]
+            Kafka[Kafka Event Streaming] --> LogIngest[Kafka Log Handler] --> QuestDB
+        end
+    end
+
+    FastAPI -->|Streaming Tokens SSE| Frontend
+```
+
+---
+
+## 3. Comprehensive Feature Breakdown
+
+### 3.1 RAG & Document Retrieval Engine (`src/rag_manager.py`)
+- **Document Ingestion**:
+  - Documents are chunked using `docling_chunker.py` and `pdf_spliter.py`.
+  - Rich metadata is extracted: document title, station ID, category, page numbers, figure references, and section headers.
+- **Hybrid Retrieval Pipeline**:
+  1. **BM25 Search**: Matches exact technical terms, serial numbers, error codes, and part identifiers.
+  2. **Dense Vector Search**: Powered by ChromaDB or Endee connector, utilizing `embeddinggemma:300m` embeddings.
+  3. **SPLADE Sparse Representation**: Preserves keyword significance in high-dimensional semantic spaces.
+  4. **Cross-Encoder Reranking**: Re-scores top $N$ retrieved chunks using `ms-marco-MiniLM-L-6-v2` for precise semantic alignment with the prompt.
+  5. **Trust Score Reranking**: Adjusts chunk scores based on accumulated user feedback ($Score_{final} = Score_{cross\_encoder} \times Trust\_Factor$).
+- **Citation & Provenance**: Every response returns precise page references, bounding boxes, and secure preview URLs.
+
+---
+
+### 3.2 Failure Analysis (FA) Agent (`src/fa_agent.py` & `src/fa_pptx_generator.py`)
+- **LangGraph State Machine**:
+  - Executed via a state graph (`StateGraph`) with nodes for **Information Extraction**, **Root Cause Analysis Review**, and **Finalization**.
+- **Automated Report Generation**:
+  - Automatically compiles collected data into structured PowerPoint (`.pptx`) failure analysis reports.
+  - Supports image inclusion, component failure details, corrective actions, and timestamp timelines.
+
+---
+
+### 3.3 QuestDB Log Correlation & MCP Server (`src/mcp_questdb_server.py`, `src/questdb_agent.py`)
+- Real-time time-series machine data ingestion from CNC machines and industrial equipment into **QuestDB**.
+- Includes 30+ specialized diagnostic tools:
+  - `db_get_today_overview` / `db_get_12hr_overview`: Production shift overviews.
+  - `db_get_recent_errors`: Instant log inspection.
+  - `db_get_voltage_threshold_breach` / `db_get_pressure_threshold_breach`: Electrical & pneumatic anomaly detection.
+  - `db_get_component_health_score`: Real-time health scoring (0-100) per machine component.
+  - `db_get_operation_latency_anomalies`: Identifies cycles exceeding 1.5x average duration.
+  - `db_get_cascading_failure_chain`: Traces log sequences leading to machine shutdown.
+
+---
+
+### 3.4 Bill of Materials (BOM) Intelligence (`src/bom_query_planner.py`, `src/bom_retriever.py`)
+- Specialized relational parsing for hierarchical manufacturing BOMs.
+- Allows operators to search for parent-child part relationships, replaceability, vendor part numbers, and assembly schematics.
+
+---
+
+### 3.5 Feedback Learning & Continuous Improvement (`src/learning.py`)
+- Stores user feedback (thumbs up / down) per chat turn.
+- Periodically executes feedback learning jobs that update PostgreSQL chunk trust tables.
+- Consistently low-rated chunks have reduced weight in vector retrieval, while high-rated chunks receive boosted priority.
+
+---
+
+### 3.6 Security, RBAC & File Access Proxy
+- **RBAC**: User roles (`admin`, `operator`, `technician`) determine accessible stations and document categories.
+- **Nginx Cookie Auth**: Raw document files (`/data/raw/...`) and parsed images are served through authenticated Nginx endpoints (`cleaned-server`, `raw-server`). Requests are verified via an internal `file-auth` container validating backend-signed JWTs/cookies.
+- **Query Guardrails**: Prevents prompt injection, malicious SQL patterns, and unauthorized system commands.
+
+---
+
+## 4. Frontend Application Map (`frontend/`)
+
+The frontend is built with React, Vite, and modern styling, structured around distinct operational views:
+
+| Page / Component | Route | Functionality |
+| :--- | :--- | :--- |
+| **Chat Window** (`src/components/ChatWindow.jsx`) | `/` | Main streaming RAG chat interface with source citations, document previews, and feedback buttons. |
+| **User Training Videos** (`src/pages/user/TrainingVideos.jsx`) | `/training-videos` | Role-filtered library of machine operating & maintenance videos. |
+| **Admin Training Videos** (`src/pages/admin/TrainingVideos.jsx`) | `/admin/training-videos` | Admin management panel to upload, tag, and assign permissions to video assets. |
+| **Schematics QA** (`src/pages/SchematicsQA.jsx`) | `/schematics` | Interactive visual schematics viewer for wiring and assembly guidance. |
+| **FA Reports** (`src/pages/FAReports.jsx`) | `/fa-reports` | Interactive builder and list viewer for Failure Analysis reports. |
+| **BOM Search** (`src/pages/BOMSearch.jsx`) | `/bom` | Part lookup, assembly hierarchy breakdown, and specification retrieval. |
+| **Log Diagnostics** (`src/pages/LogDiagnostics.jsx`) | `/diagnostics` | Real-time QuestDB machine log charts, anomaly warnings, and error breakdown. |
+
+---
+
+## 5. System Databases & Persistence Layers
+
+1. **PostgreSQL 16**: Primary relational database storing user accounts, RBAC policies, chat session metadata, provenance logs, BOM hierarchies, and chunk trust scores.
+2. **ChromaDB / Endee**: Vector stores holding chunk embeddings for semantic retrieval.
+3. **QuestDB**: High-performance time-series database storing millions of raw machine events, cycle logs, and sensor readings.
+4. **MongoDB (Fallback / Legacy)**: Document store for legacy chat history and unstructured logs.
+5. **Kafka**: Distributed event broker streaming live machine logs into QuestDB.
+
+---
+
+## 6. How to Run the Application
+
+### 6.1 Requirements
+- Python 3.10 – 3.13
+- Node.js & npm
+- Ollama (`ollama pull gemma3:4b`, `ollama pull embeddinggemma:300m`)
+- Docker / Podman (for PostgreSQL, QuestDB, ChromaDB, Kafka)
+
+### 6.2 Service Launching
+- **Windows Start Script**: `start-ai-assistant.ps1` or `start-ai-assistant.bat`
+- **Backend API Server**: `python src/fastapi_endpoint.py` (Port 5000)
+- **Frontend Dev Server**: `npm run dev` in `/frontend` (Port 5173)
+- **Ollama LLM Engine**: `ollama serve` (Port 11434)
+
+---
+*Generated automatically by Antigravity AI Assistant.*
