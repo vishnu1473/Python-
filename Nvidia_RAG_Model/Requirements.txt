@@ -1,0 +1,11 @@
+streamlit
+langchain-community
+langchain-nvidia-ai-endpoints
+openai
+faiss-cpu
+PyPDF2
+pyttsx3
+SpeechRecognition
+pyaudio
+av
+numpy
